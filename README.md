@@ -82,8 +82,36 @@ This guide also includes instructions for how to backup and restore your Mastodo
 - Once in Mastodon, set your profile image under Preferences > Public Profile > Profile Image and ensure that it can save, if you get an error, you haven't set the permissions on the 
  `./public` directory properly.
 
+## Backup
 
+There is a simple backup script in this repo, recreate it in your Mastodon directory and run with `sh ./backup.sh`. This will create a backup.zip file with today's date, containing your entire Postgres database, as well as everything in `./public`, your .env.production, your compose file, and the script itself. This script will back your Mastodon up, but a zip archive isn't a full backup solution, you should write these zips somewhere safe, ideally on another machine. That part is up to you.
 
+## Restore
+
+To restore, 
+
+- create a new directory for your restored Mastodon instance
+- unzip
+
+       unzip yourbackup.zip -d .
+
+- Repopulate your database - you need only the mastodon-db container up for this, copy /docker-compose-db.yml and restore-db.sh to your directory then
+
+       docker-compose -f docker-compose-db-yml up -d
+
+  Then run
+
+       sh ./restore-db.sh
+
+  Take down the container
+  
+      docker-compose -f docker-compose-db-yml down
+
+  Then restart everthing
+
+      docker-compose up -d
+
+  And your instance should be up and ready.
   
   
 
