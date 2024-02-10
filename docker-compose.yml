@@ -1,0 +1,152 @@
+version: '3'
+services:
+
+  proxy:
+    image: jwilder/nginx-proxy:alpine
+    labels:
+    # labels needed by lets encrypt to identify container to generate certs in
+    - "com.github.jrcs.letsencrypt_nginx_proxy_companion.nginx_proxy=true"
+    container_name: mastodon-proxy
+    networks:
+    - mastodon
+    ports:
+    - 80:80
+    - 443:443
+    volumes:
+    - ./proxy/conf.d:/etc/nginx/conf.d:rw
+    - ./proxy/vhost.d:/etc/nginx/vhost.d:rw
+    - ./proxy/html:/usr/share/nginx/html:rw
+    - ./proxy/certs:/etc/nginx/certs:ro
+    - /etc/localtime:/etc/localtime:ro
+    - /var/run/docker.sock:/tmp/docker.sock:ro
+    restart: unless-stopped
+
+  letsencrypt:
+    image: jrcs/letsencrypt-nginx-proxy-companion:v1.12.1
+    container_name: mastodon-letsencrypt
+    depends_on:
+    - proxy
+    networks:
+    - mastodon
+    volumes:
+    - ./proxy/certs:/etc/nginx/certs:rw
+    - ./proxy/vhost.d:/etc/nginx/vhost.d:rw
+    - ./proxy/html:/usr/share/nginx/html:rw
+    - /etc/localtime:/etc/localtime:ro
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  db:
+    restart: always
+    container_name: mastodon-db
+    image: postgres:14-alpine
+    shm_size: 256mb
+    networks:
+    - mastodon
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'postgres']
+    volumes:
+    - ./postgres14:/var/lib/postgresql/data
+    - ./postgres_backups:/postgres_backups:rw
+    environment:
+    - 'POSTGRES_HOST_AUTH_METHOD=trust'
+
+  redis:
+    restart: always
+    image: redis:7-alpine
+    container_name: mastodon-redis
+    networks:
+    - mastodon
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+    volumes:
+    - ./redis:/data
+
+  es:
+    restart: always
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.4
+    environment:
+    - "ES_JAVA_OPTS=-Xms512m -Xmx512m -Des.enforce.bootstrap.checks=true"
+    - "xpack.license.self_generated.type=basic"
+    - "xpack.security.enabled=false"
+    - "xpack.watcher.enabled=false"
+    - "xpack.graph.enabled=false"
+    - "xpack.ml.enabled=false"
+    - "bootstrap.memory_lock=true"
+    - "cluster.name=es-mastodon"
+    - "discovery.type=single-node"
+    - "thread_pool.write.queue_size=1000"
+    networks:
+    - mastodon
+    healthcheck:
+       test: ["CMD-SHELL", "curl --silent --fail localhost:9200/_cluster/health || exit 1"]
+    volumes:
+     - ./elasticsearch:/usr/share/elasticsearch/data
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+    - '127.0.0.1:9200:9200'
+
+  web:
+    image: ghcr.io/mastodon/mastodon:v4.2.5
+    restart: always
+    container_name: mastodon-web
+    env_file: .env.production
+    command: bundle exec puma -C config/puma.rb
+    networks:
+    - mastodon
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider --proxy=off localhost:3000/health || exit 1']
+    ports:
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      - db
+      - redis
+      - letsencrypt
+    environment:
+    # CHANGE THESE TO YOUR ACTUAL DOMAIN BEFORE GOING LIVE 
+    - LETSENCRYPT_HOST=MASTODON.YOURDOMAIN.COM
+    - LETSENCRYPT_EMAIL=mail@YOURDOMAIN.COM
+    volumes:
+    - ./public/system:/mastodon/public/system
+
+  streaming:
+    image: ghcr.io/mastodon/mastodon:v4.2.5
+    container_name: mastodon-streaming
+    restart: always
+    env_file: .env.production
+    command: node ./streaming
+    networks:
+    - mastodon
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider --proxy=off localhost:4000/api/v1/streaming/health || exit 1']
+    ports:
+      - '127.0.0.1:4000:4000'
+    depends_on:
+      - db
+      - redis
+
+  sidekiq:
+    image: ghcr.io/mastodon/mastodon:v4.2.5
+    container_name: mastodon-sidekiq
+    restart: always
+    env_file: .env.production
+    command: bundle exec sidekiq
+    depends_on:
+      - db
+      - redis
+    networks:
+    - mastodon
+    volumes:
+      - ./public/system:/mastodon/public/system
+    healthcheck:
+      test: ['CMD-SHELL', "ps aux | grep '[s]idekiq\ 6' || false"]
+
+networks:
+  mastodon:
+    driver: bridge
