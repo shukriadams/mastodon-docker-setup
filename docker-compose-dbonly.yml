@@ -1,0 +1,15 @@
+version: '3'
+services:
+
+    db:
+        restart: always
+        container_name: mastodon-db
+        image: postgres:14-alpine
+        shm_size: 256mb
+        healthcheck:
+            test: ['CMD', 'pg_isready', '-U', 'postgres']
+        volumes:
+        - ./postgres14:/var/lib/postgresql/data
+        - ./postgres_backups:/postgres_backups:rw
+        environment:
+        - 'POSTGRES_HOST_AUTH_METHOD=trust'
